@@ -362,4 +362,16 @@ with abas[5]: # Inventário
 
 with abas[6]: # Outros
     dados = {"Atividade": ["Limpeza", "Apoio"], "Mix/Participação (%)": [100, 50], "Meta (Unid/h/homem)": [10, 10], "HC Alocado": [2, 1]}
+
     renderizar_aba_padrao("Outros", dados, "outros", label_volume="Geral")
+
+# RODAPÉ DO APP
+st.markdown("---") # Linha divisória
+st.markdown(
+    """
+    <div style='text-align: center; color: #666;'>
+        🛠️ Desenvolvido por <b>Gabriel Fernandes</b> | 🚛 Simulador Logístico v1.0
+    </div>
+    """,
+    unsafe_allow_html=True
+)
