@@ -383,4 +383,11 @@ with abas[0]:
 # Chamada das demais abas
 with abas[1]: renderizar_aba_padrao("Expedição Courier", {"Atividade": ["Separação", "Embalagem"], "Mix/Participação (%)": [50, 50], "Meta (Unid/h/homem)": [100, 80], "HC Alocado": [5, 4]}, "courier")
 with abas[2]: renderizar_aba_padrao("Recebimento", {"Atividade": ["Descarga", "Conferência"], "Mix/Participação (%)": [100, 100], "Meta (Unid/h/homem)": [300, 60], "HC Alocado": [3, 4]}, "rec")
-with abas[3]: renderizar_aba_padrao("Armazenagem", {"Atividade": ["Putaway", "Ressuprimento"], "Mix/Participação (%)":
+with abas[3]: renderizar_aba_padrao("Armazenagem", {"Atividade": ["Putaway", "Ressuprimento"], "Mix/Participação (%)": [80, 20], "Meta (Unid/h/homem)": [30, 40], "HC Alocado": [4, 2]}, "arm")
+with abas[4]: renderizar_aba_padrao("Expedição Rodo", {"Atividade": ["Carregamento", "Auditoria"], "Mix/Participação (%)": [100, 20], "Meta (Unid/h/homem)": [500, 50], "HC Alocado": [4, 1]}, "exp_rodo")
+with abas[5]: renderizar_aba_padrao("Inventário", {"Atividade": ["Contagem", "Recontagem"], "Mix/Participação (%)": [90, 10], "Meta (Unid/h/homem)": [100, 50], "HC Alocado": [2, 1]}, "inv")
+with abas[6]: renderizar_aba_padrao("Outros", {"Atividade": ["Limpeza", "Apoio"], "Mix/Participação (%)": [100, 50], "Meta (Unid/h/homem)": [10, 10], "HC Alocado": [2, 1]}, "outros")
+
+# Rodapé
+st.markdown("---") 
+st.markdown("<div style='text-align: center; color: #666;'>🛠️ Desenvolvido por <b>Gabriel Fernandes</b> | 🚛 v3.2 (Estabilidade de Digitação Melhorada)</div>", unsafe_allow_html=True)
