@@ -5,40 +5,45 @@ import math
 import datetime
 
 # --- Configuração da Página ---
-st.set_page_config(page_title="Gestão Logística Full Turnos", layout="wide")
+st.set_page_config(page_title="Gestão Logística em Tempo Real", layout="wide")
 st.title("🚛 Central de Comando Logístico - Planejamento & Execução")
 
 # ==============================================================================
-# BARRA LATERAL (Controle de Turnos)
+# BARRA LATERAL (Inputs e Controle de Turnos)
 # ==============================================================================
-st.sidebar.header("🔄 Seleção de Visão")
+st.sidebar.header("🔄 Controle de Turno")
 turno_atual = st.sidebar.radio(
-    "Escolha o Turno ou Visão:", 
-    ["Turno 1", "Turno 2", "Turno 3", "Geral (Consolidado)"],
-    help="Selecione um turno para imputar dados ou 'Geral' para ver o somatório do dia."
+    "Selecione o Turno Operacional:", 
+    ["Turno 1", "Turno 2", "Turno 3"],
+    help="Todas as informações digitadas serão salvas separadamente para o turno selecionado."
 )
 
 st.sidebar.markdown("---")
+st.sidebar.header("⚙️ Configurações do Turno")
 
-# Configurações só aparecem se não for a visão Geral
-if turno_atual != "Geral (Consolidado)":
-    st.sidebar.header(f"⚙️ Configurações - {turno_atual}")
-    with st.sidebar.expander("⏰ Jornada e Eficiência", expanded=True):
-        default_times = {"Turno 1": datetime.time(6, 0), "Turno 2": datetime.time(14, 0), "Turno 3": datetime.time(22, 0)}
-        
-        horas_turno = st.number_input("Duração (h)", value=8.8, step=0.1, key=f"dur_{turno_atual}")
-        tempo_pausa = st.number_input("Pausa (h)", value=1.0, step=0.1, key=f"pausa_{turno_atual}")
-        inicio_turno = st.time_input("Início", value=default_times[turno_atual], key=f"inicio_{turno_atual}")
-        
-        horas_liquidas = horas_turno - tempo_pausa
-        absenteismo = st.sidebar.slider("Absenteísmo (%)", 0, 20, 5, key=f"abs_{turno_atual}") / 100
-        eficiencia_oee = st.sidebar.slider("Eficiência (%)", 50, 100, 85, key=f"oee_{turno_atual}") / 100
-        fator_produtivo = (1 - absenteismo) * eficiencia_oee
-else:
-    st.sidebar.info("💡 Na visão **Geral**, você visualiza a soma de todos os turnos planejados.")
-    # Valores padrão para cálculos de fundo na visão geral (não afetam os dados)
-    horas_liquidas = 7.8
-    fator_produtivo = 0.80
+with st.sidebar.expander(f"⏰ Jornada - {turno_atual}", expanded=True):
+    # Horários padrão dependendo do turno para facilitar a vida do usuário
+    default_times = {
+        "Turno 1": datetime.time(6, 0),
+        "Turno 2": datetime.time(14, 0),
+        "Turno 3": datetime.time(22, 0)
+    }
+    
+    # As 'keys' com o nome do turno garantem que cada turno tenha sua própria configuração
+    horas_turno = st.number_input("Duração do Turno (h)", value=8.8, step=0.1, key=f"dur_{turno_atual}")
+    tempo_pausa = st.number_input("Tempo de Pausa (h)", value=1.0, step=0.1, key=f"pausa_{turno_atual}")
+    inicio_turno = st.time_input("Início do Turno", value=default_times[turno_atual], key=f"inicio_{turno_atual}")
+    
+    horas_liquidas = horas_turno - tempo_pausa
+    st.sidebar.info(f"**Tempo Útil:** {horas_liquidas:.2f}h")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("Eficiência Padrão")
+absenteismo = st.sidebar.slider("Absenteísmo Médio (%)", 0, 20, 5, key=f"abs_{turno_atual}") / 100
+eficiencia_oee = st.sidebar.slider("Eficiência (OEE) (%)", 50, 100, 85, key=f"oee_{turno_atual}") / 100
+fator_produtivo = (1 - absenteismo) * eficiencia_oee
+
+st.sidebar.caption(f"Fator Produtivo ({turno_atual}): {fator_produtivo:.0%}")
 
 # ==============================================================================
 # FUNÇÕES AUXILIARES
@@ -48,142 +53,343 @@ def formatar_horas(horas):
         if pd.isna(horas) or horas == float('inf') or horas < 0: return "--:--:--"
         seg = int(horas * 3600)
         return str(datetime.timedelta(seconds=seg))
-    except: return "--:--:--"
+    except:
+        return "--:--:--"
+
+def calcular_hora_termino(horas_duracao):
+    try:
+        if pd.isna(horas_duracao) or horas_duracao == float('inf'): return "--:--:--"
+        hoje = datetime.datetime.now().date()
+        dt_inicio = datetime.datetime.combine(hoje, inicio_turno)
+        dt_fim = dt_inicio + datetime.timedelta(hours=horas_duracao)
+        return dt_fim.strftime("%H:%M")
+    except:
+        return "--:--:--"
+
+def gerar_grade_horaria(inicio, duracao_horas):
+    """Gera uma lista de horários."""
+    horarios = []
+    hoje = datetime.datetime.now().date()
+    dt_atual = datetime.datetime.combine(hoje, inicio)
+    
+    if dt_atual.minute > 0:
+        dt_atual = dt_atual.replace(minute=0, second=0) + datetime.timedelta(hours=1)
+        
+    for _ in range(int(math.ceil(duracao_horas)) + 2): 
+        horarios.append(dt_atual.strftime("%H:00"))
+        dt_atual += datetime.timedelta(hours=1)
+    return horarios
 
 def renderizar_aba_padrao(titulo, dados_padrao, key_suffix, label_volume="Volume Total"):
     """
-    Função Mestra: Planejamento, Execução e agora Visão Consolidada.
+    Função Mestra: Gera Planejamento + Execução Hora a Hora (Isolada por Turno)
     """
-    turnos_lista = ["Turno 1", "Turno 2", "Turno 3"]
+    # A chave agora contém o nome do turno para separar os dados no banco de memória
+    chave_unica = f"{key_suffix}_{turno_atual}"
     
-    if turno_atual == "Geral (Consolidado)":
-        st.markdown(f"### 📈 Visão Consolidada do Dia: {titulo}")
-        
-        # Consolidação de Dados
-        vol_total_dia = 0
-        realizado_total_dia = 0
-        dados_comparativos = []
+    # --- BLOCO 1: PLANEJAMENTO ---
+    st.markdown(f"### 📋 1. Planejamento: {titulo} ({turno_atual})")
+    
+    col_vol, col_kpi_plan = st.columns([1, 2])
+    with col_vol:
+        vol_total = st.number_input(
+            f"Meta do Turno ({label_volume})", 
+            value=1000, step=100, key=f"vol_{chave_unica}"
+        )
+    
+    # Garantir que os dados padrão entrem no estado se não existirem
+    if f"plan_data_{chave_unica}" not in st.session_state:
+        st.session_state[f"plan_data_{chave_unica}"] = pd.DataFrame(dados_padrao)
 
-        for t in turnos_lista:
-            chave = f"{key_suffix}_{t}"
-            vol = st.session_state.get(f"vol_{chave}", 0)
-            real = st.session_state.get(f"hx_data_{chave}", pd.DataFrame({"Realizado": [0]}))["Realizado"].sum()
-            vol_total_dia += vol
-            realizado_total_dia += real
-            dados_comparativos.append({"Turno": t, "Planejado": vol, "Realizado": real})
+    # Tabela Editável de Planejamento (salva direto no session_state para não perder ao trocar de turno)
+    df_plan = st.data_editor(
+        st.session_state[f"plan_data_{chave_unica}"],
+        column_config={
+            "Mix/Participação (%)": st.column_config.NumberColumn(format="%d%%", max_value=100),
+            "Meta (Unid/h/homem)": st.column_config.NumberColumn(format="%d"),
+            "HC Alocado": st.column_config.NumberColumn(format="%d", min_value=0),
+        },
+        num_rows="dynamic",
+        key=f"editor_{chave_unica}",
+        use_container_width=True
+    )
+    
+    # Atualiza o estado com o que foi digitado
+    st.session_state[f"plan_data_{chave_unica}"] = df_plan
 
-        df_comp = pd.DataFrame(dados_comparativos)
+    # Tratamento de linhas vazias
+    df_validos = df_plan.dropna(subset=["Atividade"]).copy()
+    df_validos = df_validos[df_validos["Atividade"].astype(str).str.strip() != ""]
+    
+    capacidade_hora_total = 0 
+    
+    if not df_validos.empty:
+        # Lógica de cálculo linha a linha
+        def calcular_linha(row):
+            part = row["Mix/Participação (%)"] if pd.notna(row["Mix/Participação (%)"]) else 0
+            meta = row["Meta (Unid/h/homem)"] if pd.notna(row["Meta (Unid/h/homem)"]) else 0
+            hc = row["HC Alocado"] if pd.notna(row["HC Alocado"]) else 0
+            
+            vol_tarefa = vol_total * (part / 100)
+            cap_hora = meta * hc * fator_produtivo
+            duracao = vol_tarefa / cap_hora if cap_hora > 0 else float('inf')
+            
+            return pd.Series([vol_tarefa, cap_hora, duracao])
+
+        df_validos[["Volume Tarefa", "Capacidade Real/h", "Duração (h)"]] = df_validos.apply(calcular_linha, axis=1)
         
-        # KPIs Gerais
+        capacidade_hora_total = df_validos["Capacidade Real/h"].sum()
+
+        with st.expander(f"Ver Detalhes do Planejamento ({turno_atual})", expanded=False):
+            display_df = df_validos[["Atividade", "Volume Tarefa", "HC Alocado", "Capacidade Real/h", "Duração (h)"]].copy()
+            display_df = display_df.fillna(0)
+            
+            st.dataframe(
+                display_df.style.format({
+                    "Volume Tarefa": "{:.0f}",
+                    "HC Alocado": "{:.0f}",
+                    "Capacidade Real/h": "{:.1f}",
+                    "Duração (h)": "{:.2f}"
+                }),
+                use_container_width=True
+            )
+        
+        tempo_max_plan = df_validos["Duração (h)"].max()
+        if tempo_max_plan != float('inf') and tempo_max_plan > 0:
+            termino_plan = calcular_hora_termino(tempo_max_plan)
+            with col_kpi_plan:
+                st.info(f"📆 **Previsão (Planejado):** Terminar às **{termino_plan}** com a equipe atual.")
+        else:
+            with col_kpi_plan:
+                st.warning("⚠️ Defina HC e Metas para calcular previsão.")
+
+    st.divider()
+
+    # --- BLOCO 2: EXECUÇÃO HORA A HORA ---
+    st.markdown(f"### ⏱️ 2. Execução: Acompanhamento Hora a Hora ({turno_atual})")
+    
+    col_input, col_dashboard = st.columns([1, 2])
+
+    with col_input:
+        st.caption(f"Insira a produção a cada hora do {turno_atual}:")
+        
+        lista_horas = gerar_grade_horaria(inicio_turno, horas_turno)
+        
+        if f"hx_data_{chave_unica}" not in st.session_state:
+            st.session_state[f"hx_data_{chave_unica}"] = pd.DataFrame({
+                "Hora": lista_horas,
+                "Realizado": [0] * len(lista_horas),
+                "Observação": [""] * len(lista_horas)
+            })
+
+        df_hx = st.data_editor(
+            st.session_state[f"hx_data_{chave_unica}"],
+            column_config={"Realizado": st.column_config.NumberColumn(format="%d")},
+            hide_index=True,
+            key=f"editor_hx_{chave_unica}",
+            height=300
+        )
+        
+        # Salva as edições no session_state do turno
+        st.session_state[f"hx_data_{chave_unica}"] = df_hx
+
+    # --- CÁLCULOS DO GESTOR (DECISÃO) ---
+    with col_dashboard:
+        df_hx["Realizado"] = pd.to_numeric(df_hx["Realizado"], errors='coerce').fillna(0)
+        
+        total_realizado = df_hx["Realizado"].sum()
+        saldo_pendente = vol_total - total_realizado
+        
+        horas_com_apontamento = df_hx[df_hx["Realizado"] > 0].shape[0]
+        
+        if horas_com_apontamento > 0:
+            ritmo_atual_medio = total_realizado / horas_com_apontamento
+        else:
+            ritmo_atual_medio = 0
+            
+        horas_totais_turno = horas_liquidas
+        horas_restantes_estimadas = max(0, horas_totais_turno - horas_com_apontamento)
+        
+        if horas_restantes_estimadas > 0:
+            ritmo_necessario = saldo_pendente / horas_restantes_estimadas
+        else:
+            ritmo_necessario = saldo_pendente 
+
+        # --- EXIBIÇÃO DO COCKPIT ---
+        progresso = min(total_realizado / vol_total, 1.0) if vol_total > 0 else 0
+        st.write(f"**Progresso Global ({turno_atual}):** {progresso:.1%}")
+        st.progress(progresso)
+        
         c1, c2, c3 = st.columns(3)
-        c1.metric("Meta Total do Dia", f"{vol_total_dia:,.0f}")
-        c2.metric("Total Realizado (Soma Turnos)", f"{realizado_total_dia:,.0f}")
-        prog_dia = (realizado_total_dia / vol_total_dia) if vol_total_dia > 0 else 0
-        c3.metric("Progresso Total", f"{prog_dia:.1%}")
+        c1.metric("Total Realizado", f"{total_realizado:,.0f}", delta=f"{saldo_pendente:,.0f} Pendente", delta_color="inverse")
+        c2.metric("Ritmo Atual (Média)", f"{ritmo_atual_medio:.0f}/h")
         
-        st.progress(min(prog_dia, 1.0))
-
-        # Gráfico Comparativo
-        fig = px.bar(df_comp, x="Turno", y=["Planejado", "Realizado"], barmode="group", 
-                     title=f"Desempenho por Turno - {titulo}", color_discrete_sequence=["#3498db", "#2ecc71"])
-        st.plotly_chart(fig, use_container_width=True)
-
-    else:
-        # --- MODO DE EDIÇÃO POR TURNO (Original v2.0) ---
-        chave_unica = f"{key_suffix}_{turno_atual}"
-        st.markdown(f"### 📋 1. Planejamento: {titulo} ({turno_atual})")
-        
-        col_vol, _ = st.columns([1, 2])
-        with col_vol:
-            vol_total = st.number_input(f"Meta do Turno", value=1000, step=100, key=f"vol_{chave_unica}")
-        
-        if f"plan_data_{chave_unica}" not in st.session_state:
-            st.session_state[f"plan_data_{chave_unica}"] = pd.DataFrame(dados_padrao)
-
-        df_plan = st.data_editor(st.session_state[f"plan_data_{chave_unica}"], num_rows="dynamic", key=f"editor_{chave_unica}", use_container_width=True)
-        st.session_state[f"plan_data_{chave_unica}"] = df_plan
+        delta_ritmo = ritmo_atual_medio - ritmo_necessario
+        c3.metric("Ritmo Necessário (Meta)", f"{ritmo_necessario:.0f}/h", delta=f"{delta_ritmo:.0f}")
 
         st.divider()
-        st.markdown(f"### ⏱️ 2. Execução Hora a Hora ({turno_atual})")
-        
-        col_in, col_dash = st.columns([1, 2])
-        with col_in:
-            lista_horas = [f"{h:02d}:00" for h in range(24)] # Simplificado para exemplo
-            if f"hx_data_{chave_unica}" not in st.session_state:
-                st.session_state[f"hx_data_{chave_unica}"] = pd.DataFrame({"Hora": lista_horas[:10], "Realizado": [0]*10})
-            
-            df_hx = st.data_editor(st.session_state[f"hx_data_{chave_unica}"], key=f"ed_hx_{chave_unica}", hide_index=True)
-            st.session_state[f"hx_data_{chave_unica}"] = df_hx
 
-        with col_dash:
-            real_turno = df_hx["Realizado"].sum()
-            st.metric("Realizado no Turno", f"{real_turno:,.0f}", delta=f"{vol_total - real_turno:,.0f} pendente")
-            st.info(f"O acompanhamento detalhado de ritmo e projeção de término é processado aqui no {turno_atual}.")
+        st.subheader("📢 Análise para Tomada de Decisão")
+        
+        if saldo_pendente <= 0:
+            st.success("✅ **Meta Batida!** Operação finalizada com sucesso neste turno.")
+        elif ritmo_atual_medio == 0:
+            st.info("ℹ️ Insira apontamentos na tabela ao lado para gerar análise.")
+        else:
+            if ritmo_atual_medio > 0:
+                horas_para_fim_real = saldo_pendente / ritmo_atual_medio
+                hoje = datetime.datetime.now()
+                hora_projetada = (hoje + datetime.timedelta(hours=horas_para_fim_real)).strftime("%H:%M")
+                
+                if ritmo_atual_medio >= ritmo_necessario:
+                    st.success(f"🚀 **Vem tranquilo!** Nesse ritmo, terminamos em {formatar_horas(horas_para_fim_real)}.")
+                else:
+                    total_hc_plan = df_validos["HC Alocado"].sum() if not df_validos.empty else 0
+                    prod_per_capita = capacidade_hora_total / total_hc_plan if total_hc_plan > 0 else 0
+                    
+                    deficit_produtividade = ritmo_necessario - ritmo_atual_medio
+                    if prod_per_capita > 0:
+                        pessoas_extras = math.ceil(deficit_produtividade / prod_per_capita)
+                        st.error(f"🚨 **RISCO DE ATRASO!** Projetado terminar só às {hora_projetada}.")
+                        st.markdown(f"""
+                        **Sugestões de Ação para o {turno_atual}:**
+                        1. Aumentar ritmo em **{abs(delta_ritmo):.0f} peças/h**.
+                        2. Ou alocar **+{pessoas_extras} pessoas** imediatamente.
+                        """)
+                    else:
+                        st.warning("Preencha o HC no planejamento para receber sugestão de contratação.")
 
 # ==============================================================================
 # ESTRUTURA DE ABAS
 # ==============================================================================
-abas = st.tabs(["📊 Visão Geral", "📦 Expedição Courier", "📥 Recebimento", "🏗️ Armazenagem", "🚚 Expedição Rodo", "📋 Inventário", "⚙️ Outros"])
+abas = st.tabs([
+    "📊 Visão Geral", 
+    "📦 Expedição Courier", 
+    "📥 Recebimento", 
+    "🏗️ Armazenagem", 
+    "🚚 Expedição Rodo", 
+    "📋 Inventário", 
+    "⚙️ Outros"
+])
 
-with abas[0]: # ABA VISÃO GERAL
-    if turno_atual == "Geral (Consolidado)":
-        st.subheader("📊 Consolidado Diário - Todas as Áreas")
+# ==============================================================================
+# ABA 1: VISÃO GERAL
+# ==============================================================================
+with abas[0]:
+    st.subheader(f"Dimensionamento de Headcount (Macro) - {turno_atual}")
+    st.caption("Visão consolidada de todas as áreas (Insira os totais aqui).")
+
+    # Inicia os dados base no session_state para não perder ao mudar de turno
+    if f"geral_data_{turno_atual}" not in st.session_state:
+        dados_iniciais = {
+            "Processo": ["Recebimento", "Armazenagem", "Separação", "Expedição"],
+            "Demanda (Unid.)": [5000, 5000, 12000, 1500],
+            "Produtividade Meta": [200, 150, 120, 300],
+            "HC Atual": [4, 5, 10, 1]
+        }
+        st.session_state[f"geral_data_{turno_atual}"] = pd.DataFrame(dados_iniciais)
+
+    df_editavel = st.data_editor(
+        st.session_state[f"geral_data_{turno_atual}"],
+        column_config={
+            "Demanda (Unid.)": st.column_config.NumberColumn(format="%d"),
+            "HC Atual": st.column_config.NumberColumn(format="%d"),
+        },
+        num_rows="dynamic",
+        key=f"editor_geral_{turno_atual}",
+        use_container_width=True
+    )
+    
+    # Atualiza memória
+    st.session_state[f"geral_data_{turno_atual}"] = df_editavel
+
+    def calcular_cenario(row):
+        prod = row["Produtividade Meta"] if pd.notna(row["Produtividade Meta"]) else 0
+        demanda = row["Demanda (Unid.)"] if pd.notna(row["Demanda (Unid.)"]) else 0
+        hc = row["HC Atual"] if pd.notna(row["HC Atual"]) else 0
+
+        cap_dia_pessoa = prod * horas_liquidas * fator_produtivo
         
-        # Somar demandas de todos os turnos para a visão macro
-        dados_macro = []
-        for area in ["Recebimento", "Armazenagem", "Separação", "Expedição"]:
-            total_demanda_area = 0
-            total_hc_area = 0
-            for t in ["Turno 1", "Turno 2", "Turno 3"]:
-                df_t = st.session_state.get(f"geral_data_{t}", pd.DataFrame())
-                if not df_t.empty:
-                    linha = df_t[df_t["Processo"] == area]
-                    if not linha.empty:
-                        total_demanda_area += linha["Demanda (Unid.)"].values[0]
-                        total_hc_area += linha["HC Atual"].values[0]
-            dados_macro.append({"Processo": area, "Demanda Total": total_demanda_area, "HC Total (Soma)": total_hc_area})
+        if cap_dia_pessoa > 0:
+            hc_nec = math.ceil(demanda / cap_dia_pessoa)
+        else:
+            hc_nec = 0
+            
+        gap = hc - hc_nec
         
-        df_macro = pd.DataFrame(dados_macro)
+        if gap < 0: status = "🔴 Falta"
+        elif gap == 0: status = "🟢 Ideal"
+        else: status = "🔵 Sobra"
         
-        c1, c2 = st.columns([2,1])
-        with c1:
-            fig_macro = px.bar(df_macro, x="Processo", y="Demanda Total", title="Volume Total do Dia por Área", color="Processo")
-            st.plotly_chart(fig_macro, use_container_width=True)
-        with c2:
-            st.write("**Resumo de HC do Dia (Total Pessoas):**")
-            st.table(df_macro[["Processo", "HC Total (Soma)"]])
+        return pd.Series([cap_dia_pessoa, hc_nec, gap, status])
 
-    else:
-        st.subheader(f"Dimensionamento de Headcount - {turno_atual}")
-        if f"geral_data_{turno_atual}" not in st.session_state:
-            st.session_state[f"geral_data_{turno_atual}"] = pd.DataFrame({
-                "Processo": ["Recebimento", "Armazenagem", "Separação", "Expedição"],
-                "Demanda (Unid.)": [5000, 5000, 12000, 1500],
-                "Produtividade Meta": [200, 150, 120, 300],
-                "HC Atual": [4, 5, 10, 1]
-            })
+    # Aplica cálculo
+    df_editavel[["Cap. Real/Turno", "HC Nec.", "Gap", "Status"]] = df_editavel.apply(calcular_cenario, axis=1)
 
-        df_edit = st.data_editor(st.session_state[f"geral_data_{turno_atual}"], key=f"ed_macro_{turno_atual}", use_container_width=True)
-        st.session_state[f"geral_data_{turno_atual}"] = df_edit
+    # Exibe Gráfico e KPIs
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        df_grafico = df_editavel.fillna(0)
+        fig = px.bar(
+            df_grafico, 
+            x="Processo", 
+            y=["HC Atual", "HC Nec."], 
+            barmode="group", 
+            title=f"Planejado vs Necessário ({turno_atual})",
+            color_discrete_map={"HC Atual": "#3498db", "HC Nec.": "#e74c3c"}
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        gap_total = df_editavel["Gap"].fillna(0).sum()
+        st.metric(f"Gap Total de Pessoas ({turno_atual})", f"{gap_total:.0f}")
+        
+        # CORREÇÃO DO ERRO DO PANDAS (applymap mudou para map)
+        display_geral = df_editavel[["Processo", "HC Atual", "HC Nec.", "Status"]].fillna(0)
+        st.dataframe(
+            display_geral.style.map(
+                lambda x: 'color: red; font-weight: bold' if x == "🔴 Falta" else 'color: green' if x == "🟢 Ideal" else None, 
+                subset=['Status']
+            ),
+            use_container_width=True
+        )
 
-        # Lógica de cálculo simplificada para o Gap
-        def calc_gap(row):
-            cap = row["Produtividade Meta"] * horas_liquidas * fator_produtivo
-            nec = math.ceil(row["Demanda (Unid.)"] / cap) if cap > 0 else 0
-            gap = row["HC Atual"] - nec
-            return pd.Series([nec, gap, "🟢 Ideal" if gap >= 0 else "🔴 Falta"])
+# ==============================================================================
+# ABAS OPERACIONAIS
+# ==============================================================================
+with abas[1]: # Courier
+    dados = {"Atividade": ["Separação", "Embalagem"], "Mix/Participação (%)": [50, 50], "Meta (Unid/h/homem)": [100, 80], "HC Alocado": [5, 4]}
+    renderizar_aba_padrao("Expedição Courier", dados, "courier", label_volume="Pedidos")
 
-        df_edit[["HC Nec.", "Gap", "Status"]] = df_edit.apply(calc_gap, axis=1)
-        st.dataframe(df_edit.style.map(lambda x: 'color: red; font-weight: bold' if x == "🔴 Falta" else 'color: green', subset=['Status']), use_container_width=True)
+with abas[2]: # Recebimento
+    dados = {"Atividade": ["Descarga", "Conferência"], "Mix/Participação (%)": [100, 100], "Meta (Unid/h/homem)": [300, 60], "HC Alocado": [3, 4]}
+    renderizar_aba_padrao("Recebimento", dados, "rec", label_volume="Volumes")
 
-# Chamada das demais abas
-with abas[1]: renderizar_aba_padrao("Expedição Courier", {"Atividade": ["Separação", "Embalagem"], "Mix/Participação (%)": [50, 50], "Meta (Unid/h/homem)": [100, 80], "HC Alocado": [5, 4]}, "courier")
-with abas[2]: renderizar_aba_padrao("Recebimento", {"Atividade": ["Descarga", "Conferência"], "Mix/Participação (%)": [100, 100], "Meta (Unid/h/homem)": [300, 60], "HC Alocado": [3, 4]}, "rec")
-with abas[3]: renderizar_aba_padrao("Armazenagem", {"Atividade": ["Putaway", "Ressuprimento"], "Mix/Participação (%)": [80, 20], "Meta (Unid/h/homem)": [30, 40], "HC Alocado": [4, 2]}, "arm")
-with abas[4]: renderizar_aba_padrao("Expedição Rodo", {"Atividade": ["Carregamento", "Auditoria"], "Mix/Participação (%)": [100, 20], "Meta (Unid/h/homem)": [500, 50], "HC Alocado": [4, 1]}, "exp_rodo")
-with abas[5]: renderizar_aba_padrao("Inventário", {"Atividade": ["Contagem", "Recontagem"], "Mix/Participação (%)": [90, 10], "Meta (Unid/h/homem)": [100, 50], "HC Alocado": [2, 1]}, "inv")
-with abas[6]: renderizar_aba_padrao("Outros", {"Atividade": ["Limpeza", "Apoio"], "Mix/Participação (%)": [100, 50], "Meta (Unid/h/homem)": [10, 10], "HC Alocado": [2, 1]}, "outros")
+with abas[3]: # Armazenagem
+    dados = {"Atividade": ["Putaway", "Ressuprimento"], "Mix/Participação (%)": [80, 20], "Meta (Unid/h/homem)": [30, 40], "HC Alocado": [4, 2]}
+    renderizar_aba_padrao("Armazenagem", dados, "arm", label_volume="Paletes")
 
-# Rodapé
+with abas[4]: # Expedição Rodo
+    dados = {"Atividade": ["Carregamento", "Auditoria"], "Mix/Participação (%)": [100, 20], "Meta (Unid/h/homem)": [500, 50], "HC Alocado": [4, 1]}
+    renderizar_aba_padrao("Expedição Rodo", dados, "exp_rodo", label_volume="Volumes")
+
+with abas[5]: # Inventário
+    dados = {"Atividade": ["Contagem Cíclica", "Recontagem"], "Mix/Participação (%)": [90, 10], "Meta (Unid/h/homem)": [100, 50], "HC Alocado": [2, 1]}
+    renderizar_aba_padrao("Inventário", dados, "inv", label_volume="Posições")
+
+with abas[6]: # Outros
+    dados = {"Atividade": ["Limpeza", "Apoio"], "Mix/Participação (%)": [100, 50], "Meta (Unid/h/homem)": [10, 10], "HC Alocado": [2, 1]}
+    renderizar_aba_padrao("Outros", dados, "outros", label_volume="Geral")
+
+# ==============================================================================
+# RODAPÉ DO APP
+# ==============================================================================
 st.markdown("---") 
-st.markdown("<div style='text-align: center; color: #666;'>🛠️ Desenvolvido por <b>Gabriel Fernandes</b> | 🚛 v3.0 (Consolidado Geral)</div>", unsafe_allow_html=True)
+st.markdown(
+    """
+    <div style='text-align: center; color: #666;'>
+        🛠️ Desenvolvido por <b>Gabriel Fernandes</b> | 🚛 Simulador Logístico v2.0 (Multi-Turnos)
+    </div>
+    """,
+    unsafe_allow_html=True
+)
