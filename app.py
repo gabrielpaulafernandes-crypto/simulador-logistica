@@ -79,43 +79,41 @@ def gerar_grade_horaria(inicio, duracao_horas):
     return horarios
 
 def renderizar_aba_padrao(titulo, dados_padrao, key_suffix, label_volume="Volume Total"):
-    # Inicializa estado padrão de segurança para não quebrar a Visão Geral
+    # Inicializa estado padrao para todos os turnos para não quebrar a Visão Geral
     for t in ["Turno 1", "Turno 2", "Turno 3"]:
         chave_t = f"{key_suffix}_{t}"
         if f"plan_data_{chave_t}" not in st.session_state: st.session_state[f"plan_data_{chave_t}"] = pd.DataFrame(dados_padrao)
         if f"vol_{chave_t}" not in st.session_state: st.session_state[f"vol_{chave_t}"] = 1000
 
-    # ================= MODO: VISÃO GERAL (LEITURA DE TODOS OS TURNOS) =================
+    # ================= MODO: VISÃO GERAL =================
     if turno_atual == "Visão Geral (Todos os Turnos)":
         st.markdown(f"### 📋 Quadro Geral: {titulo}")
-        
         for t in ["Turno 1", "Turno 2", "Turno 3"]:
             st.markdown(f"#### 🔹 {t}")
             chave = f"{key_suffix}_{t}"
             
-            # Resgata variáveis específicas do turno
             vol_t = st.session_state[f"vol_{chave}"]
             fator_prod_t = (1 - (st.session_state[f"abs_{t}"] / 100)) * (st.session_state[f"oee_{t}"] / 100)
-            
-            # Leitura do dataframe final (salvo após as edições) para evitar perda de dados
-            df_plan_t = st.session_state.get(f"df_final_plan_{chave}", st.session_state[f"plan_data_{chave}"]).copy()
+            df_plan_t = st.session_state[f"plan_data_{chave}"].copy()
             
             df_validos = df_plan_t.dropna(subset=["Atividade"]).copy()
             df_validos = df_validos[df_validos["Atividade"].astype(str).str.strip() != ""]
             
             if not df_validos.empty:
+                # Proteção extra contra nulos de novas linhas (Evita TypeError)
+                for col in ["Mix/Participação (%)", "Meta (Unid/h/homem)", "HC Alocado"]:
+                    if col in df_validos.columns:
+                        df_validos[col] = pd.to_numeric(df_validos[col], errors='coerce').fillna(0)
+
                 def calc_linha_t(row):
-                    part = row["Mix/Participação (%)"] if pd.notna(row["Mix/Participação (%)"]) else 0
-                    meta = row["Meta (Unid/h/homem)"] if pd.notna(row["Meta (Unid/h/homem)"]) else 0
-                    hc = row["HC Alocado"] if pd.notna(row["HC Alocado"]) else 0
-                    vol_tarefa = vol_t * (part / 100)
-                    cap_hora = meta * hc * fator_prod_t
+                    vol_tarefa = vol_t * (row["Mix/Participação (%)"] / 100)
+                    cap_hora = row["Meta (Unid/h/homem)"] * row["HC Alocado"] * fator_prod_t
                     duracao = vol_tarefa / cap_hora if cap_hora > 0 else float('inf')
                     return pd.Series([vol_tarefa, cap_hora, duracao])
 
                 df_validos[["Volume Tarefa", "Capacidade Real/h", "Duração (h)"]] = df_validos.apply(calc_linha_t, axis=1)
                 
-                # Formatação Segura
+                # Garantir que são numéricos antes da formatação para não dar o erro do NoneType
                 for col in ["Volume Tarefa", "HC Alocado", "Capacidade Real/h", "Duração (h)"]:
                     df_validos[col] = pd.to_numeric(df_validos[col], errors='coerce').fillna(0)
                 
@@ -128,8 +126,8 @@ def renderizar_aba_padrao(titulo, dados_padrao, key_suffix, label_volume="Volume
                 
                 with c2:
                     st.caption("Acompanhamento Hora a Hora (Resumo)")
-                    if f"df_final_hx_{chave}" in st.session_state:
-                        df_hx_t = st.session_state[f"df_final_hx_{chave}"].copy()
+                    if f"hx_data_{chave}" in st.session_state:
+                        df_hx_t = st.session_state[f"hx_data_{chave}"].copy()
                         df_hx_t["Realizado"] = pd.to_numeric(df_hx_t["Realizado"], errors='coerce').fillna(0)
                         total_realizado = df_hx_t["Realizado"].sum()
                         progresso = min(total_realizado / vol_t, 1.0) if vol_t > 0 else 0
@@ -148,14 +146,7 @@ def renderizar_aba_padrao(titulo, dados_padrao, key_suffix, label_volume="Volume
         with col_vol:
             vol_total = st.number_input(f"Meta ({label_volume})", value=st.session_state[f"vol_{chave_unica}"], step=100, key=f"vol_{chave_unica}")
         
-        # === SOLUÇÃO DO BUG DO TECLADO: Backup Dictionary ===
-        editor_plan_key = f"editor_{chave_unica}"
-        backup_plan_key = f"backup_{editor_plan_key}"
-
-        # Se o editor foi fechado (ao mudar de turno), restauramos o histórico dele antes de abrir de novo
-        if backup_plan_key in st.session_state and editor_plan_key not in st.session_state:
-            st.session_state[editor_plan_key] = st.session_state[backup_plan_key]
-
+        # REMOVIDO HACK DO BACKUP QUE CAUSAVA O StreamlitValueAssignmentNotAllowedError
         df_plan = st.data_editor(
             st.session_state[f"plan_data_{chave_unica}"],
             column_config={
@@ -163,26 +154,24 @@ def renderizar_aba_padrao(titulo, dados_padrao, key_suffix, label_volume="Volume
                 "Meta (Unid/h/homem)": st.column_config.NumberColumn(format="%d"),
                 "HC Alocado": st.column_config.NumberColumn(format="%d", min_value=0),
             },
-            num_rows="dynamic", key=editor_plan_key, use_container_width=True
+            num_rows="dynamic", key=f"editor_{chave_unica}", use_container_width=True
         )
-        
-        # Salvamos o histórico de edições escondido
-        st.session_state[backup_plan_key] = st.session_state[editor_plan_key]
-        # Salvamos o resultado final limpo para a Visão Geral ler
-        st.session_state[f"df_final_plan_{chave_unica}"] = df_plan
-        # ====================================================
+        # Atualizamos o dataframe base apenas com o resultado final limpo
+        st.session_state[f"plan_data_{chave_unica}"] = df_plan
 
         df_validos = df_plan.dropna(subset=["Atividade"]).copy()
         df_validos = df_validos[df_validos["Atividade"].astype(str).str.strip() != ""]
         capacidade_hora_total = 0 
 
         if not df_validos.empty:
+            # Proteção anti-NoneType quando adiciona nova linha manualmente
+            for col in ["Mix/Participação (%)", "Meta (Unid/h/homem)", "HC Alocado"]:
+                if col in df_validos.columns:
+                    df_validos[col] = pd.to_numeric(df_validos[col], errors='coerce').fillna(0)
+
             def calcular_linha(row):
-                part = row["Mix/Participação (%)"] if pd.notna(row["Mix/Participação (%)"]) else 0
-                meta = row["Meta (Unid/h/homem)"] if pd.notna(row["Meta (Unid/h/homem)"]) else 0
-                hc = row["HC Alocado"] if pd.notna(row["HC Alocado"]) else 0
-                vol_tarefa = vol_total * (part / 100)
-                cap_hora = meta * hc * fator_produtivo
+                vol_tarefa = vol_total * (row["Mix/Participação (%)"] / 100)
+                cap_hora = row["Meta (Unid/h/homem)"] * row["HC Alocado"] * fator_produtivo
                 duracao = vol_tarefa / cap_hora if cap_hora > 0 else float('inf')
                 return pd.Series([vol_tarefa, cap_hora, duracao])
 
@@ -191,6 +180,8 @@ def renderizar_aba_padrao(titulo, dados_padrao, key_suffix, label_volume="Volume
 
             with st.expander(f"Detalhes do Planejamento ({turno_atual})", expanded=False):
                 display_df = df_validos[["Atividade", "Volume Tarefa", "HC Alocado", "Capacidade Real/h", "Duração (h)"]].copy()
+                
+                # Força para numero antes de aplicar o .style.format para evitar o erro ValueError/TypeError
                 for col in ["Volume Tarefa", "HC Alocado", "Capacidade Real/h", "Duração (h)"]:
                     display_df[col] = pd.to_numeric(display_df[col], errors='coerce').fillna(0)
                 
@@ -213,24 +204,16 @@ def renderizar_aba_padrao(titulo, dados_padrao, key_suffix, label_volume="Volume
         
         col_in, col_dash = st.columns([1, 2])
         with col_in:
-            ed_hx_key = f"ed_hx_{chave_unica}"
-            backup_hx_key = f"backup_{ed_hx_key}"
-
             lista_horas = gerar_grade_horaria(st.session_state[f"inicio_{turno_atual}"], st.session_state[f"dur_{turno_atual}"])
             if f"hx_data_{chave_unica}" not in st.session_state:
                 st.session_state[f"hx_data_{chave_unica}"] = pd.DataFrame({"Hora": lista_horas, "Realizado": [0]*len(lista_horas)})
             
-            if backup_hx_key in st.session_state and ed_hx_key not in st.session_state:
-                st.session_state[ed_hx_key] = st.session_state[backup_hx_key]
-
             df_hx = st.data_editor(
                 st.session_state[f"hx_data_{chave_unica}"],
                 column_config={"Realizado": st.column_config.NumberColumn(format="%d")},
-                hide_index=True, key=ed_hx_key, height=300
+                hide_index=True, key=f"ed_hx_{chave_unica}", height=300
             )
-            
-            st.session_state[backup_hx_key] = st.session_state[ed_hx_key]
-            st.session_state[f"df_final_hx_{chave_unica}"] = df_hx
+            st.session_state[f"hx_data_{chave_unica}"] = df_hx
 
         with col_dash:
             df_hx["Realizado"] = pd.to_numeric(df_hx["Realizado"], errors='coerce').fillna(0)
@@ -268,7 +251,6 @@ def renderizar_aba_padrao(titulo, dados_padrao, key_suffix, label_volume="Volume
 # ==============================================================================
 abas = st.tabs(["📊 Visão Geral", "📦 Expedição Courier", "📥 Recebimento", "🏗️ Armazenagem", "🚚 Expedição Rodo", "📋 Inventário", "⚙️ Outros"])
 
-# Inicializa Dados Base da Macro
 for t in ["Turno 1", "Turno 2", "Turno 3"]:
     if f"geral_data_{t}" not in st.session_state:
         st.session_state[f"geral_data_{t}"] = pd.DataFrame({
@@ -285,17 +267,19 @@ with abas[0]:
         for t in ["Turno 1", "Turno 2", "Turno 3"]:
             st.markdown(f"#### 🚛 {t}")
             
-            df_t = st.session_state.get(f"df_final_macro_{t}", st.session_state[f"geral_data_{t}"]).copy()
+            df_t = st.session_state[f"geral_data_{t}"].copy()
             hr_liq_t = st.session_state[f"dur_{t}"] - st.session_state[f"pausa_{t}"]
             fat_prod_t = (1 - (st.session_state[f"abs_{t}"] / 100)) * (st.session_state[f"oee_{t}"] / 100)
 
+            # Força numérico p não dar erro NoneType
+            df_t["Produtividade Meta"] = pd.to_numeric(df_t["Produtividade Meta"], errors='coerce').fillna(0)
+            df_t["Demanda (Unid.)"] = pd.to_numeric(df_t["Demanda (Unid.)"], errors='coerce').fillna(0)
+            df_t["HC Atual"] = pd.to_numeric(df_t["HC Atual"], errors='coerce').fillna(0)
+
             def calc_gap_t(row):
-                prod = pd.to_numeric(row["Produtividade Meta"], errors='coerce') if pd.notna(row["Produtividade Meta"]) else 0
-                demanda = pd.to_numeric(row["Demanda (Unid.)"], errors='coerce') if pd.notna(row["Demanda (Unid.)"]) else 0
-                hc = pd.to_numeric(row["HC Atual"], errors='coerce') if pd.notna(row["HC Atual"]) else 0
-                cap = prod * hr_liq_t * fat_prod_t
-                nec = math.ceil(demanda / cap) if cap > 0 else 0
-                gap = hc - nec
+                cap = row["Produtividade Meta"] * hr_liq_t * fat_prod_t
+                nec = math.ceil(row["Demanda (Unid.)"] / cap) if cap > 0 else 0
+                gap = row["HC Atual"] - nec
                 return pd.Series([nec, gap, "🟢 Ideal" if gap >= 0 else "🔴 Falta"])
 
             df_t[["HC Nec.", "Gap", "Status"]] = df_t.apply(calc_gap_t, axis=1)
@@ -326,36 +310,30 @@ with abas[0]:
     else:
         st.subheader(f"Dimensionamento Macro - {turno_atual}")
         
-        ed_macro_key = f"ed_macro_{turno_atual}"
-        backup_macro_key = f"backup_{ed_macro_key}"
-
-        if backup_macro_key in st.session_state and ed_macro_key not in st.session_state:
-            st.session_state[ed_macro_key] = st.session_state[backup_macro_key]
-
+        # REMOVIDO HACK DO BACKUP QUE CAUSAVA O ERRO VERMELHO
         df_edit = st.data_editor(
             st.session_state[f"geral_data_{turno_atual}"], 
-            key=ed_macro_key, 
+            key=f"ed_macro_{turno_atual}", 
             use_container_width=True
         )
+        st.session_state[f"geral_data_{turno_atual}"] = df_edit
 
-        st.session_state[backup_macro_key] = st.session_state[ed_macro_key]
-        st.session_state[f"df_final_macro_{turno_atual}"] = df_edit
+        df_calc = df_edit.copy()
+        df_calc["Produtividade Meta"] = pd.to_numeric(df_calc["Produtividade Meta"], errors='coerce').fillna(0)
+        df_calc["Demanda (Unid.)"] = pd.to_numeric(df_calc["Demanda (Unid.)"], errors='coerce').fillna(0)
+        df_calc["HC Atual"] = pd.to_numeric(df_calc["HC Atual"], errors='coerce').fillna(0)
 
         def calc_gap(row):
-            prod = pd.to_numeric(row["Produtividade Meta"], errors='coerce') if pd.notna(row["Produtividade Meta"]) else 0
-            demanda = pd.to_numeric(row["Demanda (Unid.)"], errors='coerce') if pd.notna(row["Demanda (Unid.)"]) else 0
-            hc = pd.to_numeric(row["HC Atual"], errors='coerce') if pd.notna(row["HC Atual"]) else 0
-
-            cap = prod * horas_liquidas * fator_produtivo
-            nec = math.ceil(demanda / cap) if cap > 0 else 0
-            gap = hc - nec
+            cap = row["Produtividade Meta"] * horas_liquidas * fator_produtivo
+            nec = math.ceil(row["Demanda (Unid.)"] / cap) if cap > 0 else 0
+            gap = row["HC Atual"] - nec
             return pd.Series([nec, gap, "🟢 Ideal" if gap >= 0 else "🔴 Falta"])
 
-        df_edit[["HC Nec.", "Gap", "Status"]] = df_edit.apply(calc_gap, axis=1)
+        df_calc[["HC Nec.", "Gap", "Status"]] = df_calc.apply(calc_gap, axis=1)
 
         col1, col2 = st.columns([2, 1])
         with col1:
-            df_grafico = df_edit.copy()
+            df_grafico = df_calc.copy()
             df_grafico["HC Atual"] = pd.to_numeric(df_grafico["HC Atual"], errors="coerce").fillna(0).astype(float)
             df_grafico["HC Nec."] = pd.to_numeric(df_grafico["HC Nec."], errors="coerce").fillna(0).astype(float)
 
@@ -370,11 +348,11 @@ with abas[0]:
             st.plotly_chart(fig, use_container_width=True, key=f"grafico_unico_{turno_atual}")
         
         with col2:
-            gap_total = pd.to_numeric(df_edit["Gap"], errors='coerce').fillna(0).sum()
+            gap_total = pd.to_numeric(df_calc["Gap"], errors='coerce').fillna(0).sum()
             st.metric("Gap Total", f"{gap_total:.0f}")
             
             st.dataframe(
-                df_edit[["Processo", "HC Atual", "HC Nec.", "Status"]].style.map(
+                df_calc[["Processo", "HC Atual", "HC Nec.", "Status"]].style.map(
                     lambda x: 'color: red; font-weight: bold' if x == "🔴 Falta" else 'color: green', subset=['Status']
                 ),
                 use_container_width=True
@@ -390,4 +368,4 @@ with abas[6]: renderizar_aba_padrao("Outros", {"Atividade": ["Limpeza", "Apoio"]
 
 # Rodapé
 st.markdown("---") 
-st.markdown("<div style='text-align: center; color: #666;'>🛠️ Desenvolvido por <b>Gabriel Fernandes</b> | 🚛 v3.2 (Estabilidade de Digitação Melhorada)</div>", unsafe_allow_html=True)
+st.markdown("<div style='text-align: center; color: #666;'>🛠️ Desenvolvido por <b>Gabriel Fernandes</b> | 🚛 v3.3 (Bug Fixes Definitivos)</div>", unsafe_allow_html=True)
