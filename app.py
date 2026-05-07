@@ -9,7 +9,7 @@ st.set_page_config(page_title="Gestão Logística Full Turnos", layout="wide")
 st.title("🚛 Central de Comando Logístico - Planejamento & Execução")
 
 # ==============================================================================
-# INICIALIZAÇÃO DE VARIÁVEIS NA MEMÓRIA (Garante que a Visão Geral funcione)
+# INICIALIZAÇÃO DE VARIÁVEIS NA MEMÓRIA
 # ==============================================================================
 default_times = {"Turno 1": datetime.time(6, 0), "Turno 2": datetime.time(14, 0), "Turno 3": datetime.time(22, 0)}
 for t in ["Turno 1", "Turno 2", "Turno 3"]:
@@ -31,7 +31,6 @@ turno_atual = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 
-# Configurações do Turno Específico
 if turno_atual != "Visão Geral (Todos os Turnos)":
     st.sidebar.header(f"⚙️ Configurações - {turno_atual}")
     with st.sidebar.expander("⏰ Jornada e Eficiência", expanded=True):
@@ -79,13 +78,13 @@ def gerar_grade_horaria(inicio, duracao_horas):
     return horarios
 
 def renderizar_aba_padrao(titulo, dados_padrao, key_suffix, label_volume="Volume Total"):
-    # Inicializa estado padrao para todos os turnos para não quebrar a Visão Geral
+    # Inicialização segura para garantir que as tabelas existam na memória base
     for t in ["Turno 1", "Turno 2", "Turno 3"]:
         chave_t = f"{key_suffix}_{t}"
-        if f"plan_data_{chave_t}" not in st.session_state: st.session_state[f"plan_data_{chave_t}"] = pd.DataFrame(dados_padrao)
+        if f"base_plan_{chave_t}" not in st.session_state: st.session_state[f"base_plan_{chave_t}"] = pd.DataFrame(dados_padrao)
         if f"vol_{chave_t}" not in st.session_state: st.session_state[f"vol_{chave_t}"] = 1000
 
-    # ================= MODO: VISÃO GERAL =================
+    # ================= MODO: VISÃO GERAL (LEITURA) =================
     if turno_atual == "Visão Geral (Todos os Turnos)":
         st.markdown(f"### 📋 Quadro Geral: {titulo}")
         for t in ["Turno 1", "Turno 2", "Turno 3"]:
@@ -94,13 +93,14 @@ def renderizar_aba_padrao(titulo, dados_padrao, key_suffix, label_volume="Volume
             
             vol_t = st.session_state[f"vol_{chave}"]
             fator_prod_t = (1 - (st.session_state[f"abs_{t}"] / 100)) * (st.session_state[f"oee_{t}"] / 100)
-            df_plan_t = st.session_state[f"plan_data_{chave}"].copy()
+            
+            # Pega sempre a versão mais recente editada (ou a base se nunca foi editado)
+            df_plan_t = st.session_state.get(f"latest_plan_{chave}", st.session_state[f"base_plan_{chave}"]).copy()
             
             df_validos = df_plan_t.dropna(subset=["Atividade"]).copy()
             df_validos = df_validos[df_validos["Atividade"].astype(str).str.strip() != ""]
             
             if not df_validos.empty:
-                # Proteção extra contra nulos de novas linhas (Evita TypeError)
                 for col in ["Mix/Participação (%)", "Meta (Unid/h/homem)", "HC Alocado"]:
                     if col in df_validos.columns:
                         df_validos[col] = pd.to_numeric(df_validos[col], errors='coerce').fillna(0)
@@ -113,7 +113,6 @@ def renderizar_aba_padrao(titulo, dados_padrao, key_suffix, label_volume="Volume
 
                 df_validos[["Volume Tarefa", "Capacidade Real/h", "Duração (h)"]] = df_validos.apply(calc_linha_t, axis=1)
                 
-                # Garantir que são numéricos antes da formatação para não dar o erro do NoneType
                 for col in ["Volume Tarefa", "HC Alocado", "Capacidade Real/h", "Duração (h)"]:
                     df_validos[col] = pd.to_numeric(df_validos[col], errors='coerce').fillna(0)
                 
@@ -126,8 +125,8 @@ def renderizar_aba_padrao(titulo, dados_padrao, key_suffix, label_volume="Volume
                 
                 with c2:
                     st.caption("Acompanhamento Hora a Hora (Resumo)")
-                    if f"hx_data_{chave}" in st.session_state:
-                        df_hx_t = st.session_state[f"hx_data_{chave}"].copy()
+                    if f"latest_hx_{chave}" in st.session_state:
+                        df_hx_t = st.session_state[f"latest_hx_{chave}"].copy()
                         df_hx_t["Realizado"] = pd.to_numeric(df_hx_t["Realizado"], errors='coerce').fillna(0)
                         total_realizado = df_hx_t["Realizado"].sum()
                         progresso = min(total_realizado / vol_t, 1.0) if vol_t > 0 else 0
@@ -146,25 +145,33 @@ def renderizar_aba_padrao(titulo, dados_padrao, key_suffix, label_volume="Volume
         with col_vol:
             vol_total = st.number_input(f"Meta ({label_volume})", value=st.session_state[f"vol_{chave_unica}"], step=100, key=f"vol_{chave_unica}")
         
-        # REMOVIDO HACK DO BACKUP QUE CAUSAVA O StreamlitValueAssignmentNotAllowedError
+        # --- Lógica Anti-Piscada ---
+        editor_plan_key = f"editor_plan_{chave_unica}"
+        base_plan_key = f"base_plan_{chave_unica}"
+        latest_plan_key = f"latest_plan_{chave_unica}"
+
+        # Se o widget sumiu da tela (foi p/ outro turno) e voltou, restauramos a tabela base com os últimos dados digitados
+        if editor_plan_key not in st.session_state and latest_plan_key in st.session_state:
+            st.session_state[base_plan_key] = st.session_state[latest_plan_key].copy()
+
         df_plan = st.data_editor(
-            st.session_state[f"plan_data_{chave_unica}"],
+            st.session_state[base_plan_key],
             column_config={
                 "Mix/Participação (%)": st.column_config.NumberColumn(format="%d%%", max_value=100),
                 "Meta (Unid/h/homem)": st.column_config.NumberColumn(format="%d"),
                 "HC Alocado": st.column_config.NumberColumn(format="%d", min_value=0),
             },
-            num_rows="dynamic", key=f"editor_{chave_unica}", use_container_width=True
+            num_rows="dynamic", key=editor_plan_key, use_container_width=True
         )
-        # Atualizamos o dataframe base apenas com o resultado final limpo
-        st.session_state[f"plan_data_{chave_unica}"] = df_plan
+        
+        # Salvamos o que foi digitado em uma gaveta separada (latest) para o sistema não re-escrever por cima
+        st.session_state[latest_plan_key] = df_plan.copy()
 
         df_validos = df_plan.dropna(subset=["Atividade"]).copy()
         df_validos = df_validos[df_validos["Atividade"].astype(str).str.strip() != ""]
         capacidade_hora_total = 0 
 
         if not df_validos.empty:
-            # Proteção anti-NoneType quando adiciona nova linha manualmente
             for col in ["Mix/Participação (%)", "Meta (Unid/h/homem)", "HC Alocado"]:
                 if col in df_validos.columns:
                     df_validos[col] = pd.to_numeric(df_validos[col], errors='coerce').fillna(0)
@@ -180,8 +187,6 @@ def renderizar_aba_padrao(titulo, dados_padrao, key_suffix, label_volume="Volume
 
             with st.expander(f"Detalhes do Planejamento ({turno_atual})", expanded=False):
                 display_df = df_validos[["Atividade", "Volume Tarefa", "HC Alocado", "Capacidade Real/h", "Duração (h)"]].copy()
-                
-                # Força para numero antes de aplicar o .style.format para evitar o erro ValueError/TypeError
                 for col in ["Volume Tarefa", "HC Alocado", "Capacidade Real/h", "Duração (h)"]:
                     display_df[col] = pd.to_numeric(display_df[col], errors='coerce').fillna(0)
                 
@@ -204,16 +209,24 @@ def renderizar_aba_padrao(titulo, dados_padrao, key_suffix, label_volume="Volume
         
         col_in, col_dash = st.columns([1, 2])
         with col_in:
-            lista_horas = gerar_grade_horaria(st.session_state[f"inicio_{turno_atual}"], st.session_state[f"dur_{turno_atual}"])
-            if f"hx_data_{chave_unica}" not in st.session_state:
-                st.session_state[f"hx_data_{chave_unica}"] = pd.DataFrame({"Hora": lista_horas, "Realizado": [0]*len(lista_horas)})
+            # --- Lógica Anti-Piscada para Hora a Hora ---
+            editor_hx_key = f"editor_hx_{chave_unica}"
+            base_hx_key = f"base_hx_{chave_unica}"
+            latest_hx_key = f"latest_hx_{chave_unica}"
+
+            if base_hx_key not in st.session_state:
+                lista_horas = gerar_grade_horaria(st.session_state[f"inicio_{turno_atual}"], st.session_state[f"dur_{turno_atual}"])
+                st.session_state[base_hx_key] = pd.DataFrame({"Hora": lista_horas, "Realizado": [0]*len(lista_horas)})
             
+            if editor_hx_key not in st.session_state and latest_hx_key in st.session_state:
+                st.session_state[base_hx_key] = st.session_state[latest_hx_key].copy()
+
             df_hx = st.data_editor(
-                st.session_state[f"hx_data_{chave_unica}"],
+                st.session_state[base_hx_key],
                 column_config={"Realizado": st.column_config.NumberColumn(format="%d")},
-                hide_index=True, key=f"ed_hx_{chave_unica}", height=300
+                hide_index=True, key=editor_hx_key, height=300
             )
-            st.session_state[f"hx_data_{chave_unica}"] = df_hx
+            st.session_state[latest_hx_key] = df_hx.copy()
 
         with col_dash:
             df_hx["Realizado"] = pd.to_numeric(df_hx["Realizado"], errors='coerce').fillna(0)
@@ -252,8 +265,8 @@ def renderizar_aba_padrao(titulo, dados_padrao, key_suffix, label_volume="Volume
 abas = st.tabs(["📊 Visão Geral", "📦 Expedição Courier", "📥 Recebimento", "🏗️ Armazenagem", "🚚 Expedição Rodo", "📋 Inventário", "⚙️ Outros"])
 
 for t in ["Turno 1", "Turno 2", "Turno 3"]:
-    if f"geral_data_{t}" not in st.session_state:
-        st.session_state[f"geral_data_{t}"] = pd.DataFrame({
+    if f"base_macro_{t}" not in st.session_state:
+        st.session_state[f"base_macro_{t}"] = pd.DataFrame({
             "Processo": ["Recebimento", "Armazenagem", "Separação", "Expedição"],
             "Demanda (Unid.)": [5000, 5000, 12000, 1500],
             "Produtividade Meta": [200, 150, 120, 300],
@@ -267,11 +280,10 @@ with abas[0]:
         for t in ["Turno 1", "Turno 2", "Turno 3"]:
             st.markdown(f"#### 🚛 {t}")
             
-            df_t = st.session_state[f"geral_data_{t}"].copy()
+            df_t = st.session_state.get(f"latest_macro_{t}", st.session_state[f"base_macro_{t}"]).copy()
             hr_liq_t = st.session_state[f"dur_{t}"] - st.session_state[f"pausa_{t}"]
             fat_prod_t = (1 - (st.session_state[f"abs_{t}"] / 100)) * (st.session_state[f"oee_{t}"] / 100)
 
-            # Força numérico p não dar erro NoneType
             df_t["Produtividade Meta"] = pd.to_numeric(df_t["Produtividade Meta"], errors='coerce').fillna(0)
             df_t["Demanda (Unid.)"] = pd.to_numeric(df_t["Demanda (Unid.)"], errors='coerce').fillna(0)
             df_t["HC Atual"] = pd.to_numeric(df_t["HC Atual"], errors='coerce').fillna(0)
@@ -310,13 +322,20 @@ with abas[0]:
     else:
         st.subheader(f"Dimensionamento Macro - {turno_atual}")
         
-        # REMOVIDO HACK DO BACKUP QUE CAUSAVA O ERRO VERMELHO
+        # --- Lógica Anti-Piscada para Visão Geral Macro ---
+        editor_macro_key = f"ed_macro_{turno_atual}"
+        base_macro_key = f"base_macro_{turno_atual}"
+        latest_macro_key = f"latest_macro_{turno_atual}"
+
+        if editor_macro_key not in st.session_state and latest_macro_key in st.session_state:
+            st.session_state[base_macro_key] = st.session_state[latest_macro_key].copy()
+
         df_edit = st.data_editor(
-            st.session_state[f"geral_data_{turno_atual}"], 
-            key=f"ed_macro_{turno_atual}", 
+            st.session_state[base_macro_key], 
+            key=editor_macro_key, 
             use_container_width=True
         )
-        st.session_state[f"geral_data_{turno_atual}"] = df_edit
+        st.session_state[latest_macro_key] = df_edit.copy()
 
         df_calc = df_edit.copy()
         df_calc["Produtividade Meta"] = pd.to_numeric(df_calc["Produtividade Meta"], errors='coerce').fillna(0)
@@ -368,4 +387,4 @@ with abas[6]: renderizar_aba_padrao("Outros", {"Atividade": ["Limpeza", "Apoio"]
 
 # Rodapé
 st.markdown("---") 
-st.markdown("<div style='text-align: center; color: #666;'>🛠️ Desenvolvido por <b>Gabriel Fernandes</b> | 🚛 v3.3 (Bug Fixes Definitivos)</div>", unsafe_allow_html=True)
+st.markdown("<div style='text-align: center; color: #666;'>🛠️ Desenvolvido por <b>Gabriel Fernandes</b> | 🚛 v3.4 (Definitiva Anti-Blink)</div>", unsafe_allow_html=True)
