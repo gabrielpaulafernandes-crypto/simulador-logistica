@@ -279,14 +279,16 @@ with abas[0]:
             
             c1, c2 = st.columns([2, 1])
             with c1:
+                # ====== CORREÇÃO DO DATAFRAME (KEY) ======
                 st.dataframe(
                     df_t[["Processo", "HC Atual", "HC Nec.", "Status"]].style.map(
                         lambda x: 'color: red; font-weight: bold' if x == "🔴 Falta" else 'color: green', subset=['Status']
                     ),
-                    use_container_width=True
+                    use_container_width=True,
+                    key=f"df_leitura_{t}"
                 )
             with c2:
-                # ====== CORREÇÃO DO ERRO DO PLOTLY ======
+                # ====== CORREÇÃO DO ERRO DO PLOTLY DUPLICATE ID ======
                 df_grafico = df_t.copy()
                 df_grafico["HC Atual"] = pd.to_numeric(df_grafico["HC Atual"], errors="coerce").fillna(0).astype(float)
                 df_grafico["HC Nec."] = pd.to_numeric(df_grafico["HC Nec."], errors="coerce").fillna(0).astype(float)
@@ -297,7 +299,8 @@ with abas[0]:
                     color_discrete_map={"HC Atual": "#3498db", "HC Nec.": "#e74c3c"},
                     height=250
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                # Adicionada a chave `key` para o Streamlit não se confundir no laço de repetição
+                st.plotly_chart(fig, use_container_width=True, key=f"grafico_{t}")
             st.divider()
 
     else:
@@ -320,7 +323,6 @@ with abas[0]:
 
         col1, col2 = st.columns([2, 1])
         with col1:
-            # ====== CORREÇÃO DO ERRO DO PLOTLY ======
             df_grafico = df_edit.copy()
             df_grafico["HC Atual"] = pd.to_numeric(df_grafico["HC Atual"], errors="coerce").fillna(0).astype(float)
             df_grafico["HC Nec."] = pd.to_numeric(df_grafico["HC Nec."], errors="coerce").fillna(0).astype(float)
@@ -333,13 +335,12 @@ with abas[0]:
                 title=f"Equipe: Real vs Necessário ({turno_atual})",
                 color_discrete_map={"HC Atual": "#3498db", "HC Nec.": "#e74c3c"}
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key=f"grafico_unico_{turno_atual}")
         
         with col2:
             gap_total = pd.to_numeric(df_edit["Gap"], errors='coerce').fillna(0).sum()
             st.metric("Gap Total", f"{gap_total:.0f}")
             
-            # ====== CORREÇÃO DO APPLYMAP ======
             st.dataframe(
                 df_edit[["Processo", "HC Atual", "HC Nec.", "Status"]].style.map(
                     lambda x: 'color: red; font-weight: bold' if x == "🔴 Falta" else 'color: green', subset=['Status']
